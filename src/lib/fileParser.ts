@@ -1,173 +1,123 @@
 // src/lib/fileParser.ts
-// cspell:ignore certif turbopack mammoth
-// PATH FIX: imports now use the corrected '@/*' → './src/*' alias
-// (was '@/src/types' / '@/src/lib/security', which double-counted 'src').
-import type { FileFormat, FileParseResult, FileValidationResult } from '@/types';
-import { validateResumeFile, detectFileFormatFromBuffer, sanitizeInput } from '@/lib/security';
+// In-memory document extraction for PDF, DOCX, and TXT files.
+// Designed to run in a Node.js serverless environment (not Edge).
+// Ensures no files are written to disk to maintain strict privacy compliance.
 
-// ── Section Detection & Analytics ──────────────────────────────────────────
-
-const SECTION_PATTERNS = [
-  { name: 'experience', patterns: [/work experience/i, /professional experience/i, /employment history/i, /experience/i] },
-  { name: 'skills', patterns: [/technical skills/i, /skills/i, /competencies/i, /technologies/i] },
-  { name: 'education', patterns: [/education/i, /academic background/i, /qualifications/i, /degree/i] },
-  { name: 'summary', patterns: [/summary/i, /objective/i, /profile/i, /about me/i, /overview/i] },
-  { name: 'certifications', patterns: [/certif/i, /licenses/i, /credentials/i] },
-  { name: 'projects', patterns: [/projects/i, /portfolio/i, /open.?source/i] },
-  { name: 'awards', patterns: [/awards/i, /honors/i, /achievements/i, /recognition/i] },
-  { name: 'languages', patterns: [/languages/i] },
-  { name: 'publications', patterns: [/publications/i, /papers/i, /research/i] },
-];
-
-function detectSections(text: string): string[] {
-  const detected = new Set<string>();
-  const lines = text.split('\n').slice(0, 200); // Usually sections are headers
-
-  for (const line of lines) {
-    if (line.length > 40) continue; // Skip long paragraph lines
-    for (const section of SECTION_PATTERNS) {
-      if (section.patterns.some(regex => regex.test(line))) {
-        detected.add(section.name);
-      }
-    }
-  }
-  return Array.from(detected);
-}
-
-function estimateWordCount(text: string): number {
-  return text.split(/\s+/).filter(word => word.length > 0).length;
-}
-
-function hasQuantifiedAchievements(text: string): boolean {
-  // Matches percentages, dollar amounts, and large numbers indicating metrics
-  const metricRegex = /(\d{1,3}%|\$\d+[kmbKMB]?|\b[1-9]\d{2,}\b)/g;
-  const matches = text.match(metricRegex);
-  return matches !== null && matches.length > 2;
-}
-
-// ── File Extraction Engines ────────────────────────────────────────────────
-
-async function extractFromPDF(buffer: Buffer): Promise<string> {
-  // Dynamic import with .mjs extension for Next.js 15+ Turbopack compatibility.
-  // pdfjs-dist is also listed in next.config.ts serverExternalPackages so the
-  // bundler leaves it alone entirely.
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
-
-  // Safe initialization for the server environment (disables browser worker expectation)
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '';
-
-  const uint8Array = new Uint8Array(buffer);
-  const loadingTask = pdfjsLib.getDocument({
-    data: uint8Array,
-    useWorkerFetch: false,
-    useSystemFonts: true,
-  });
-
-  const pdf = await loadingTask.promise;
-  let fullText = '';
-
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map(item => ('str' in item ? item.str : ''))
-      .join(' ');
-    fullText += pageText + '\n';
-  }
-
-  return fullText;
-}
-
-async function extractFromDOCX(buffer: Buffer): Promise<string> {
-  // Dynamic import to prevent Turbopack CommonJS bundling crashes
-  const mammothModule = await import('mammoth');
-  const mammoth = mammothModule.default || mammothModule;
-
-  const result = await mammoth.extractRawText({ buffer });
-  if (result.messages?.length) {
-    console.warn('Mammoth extraction warnings:', result.messages);
-  }
-
-  return result.value;
-}
-
-function extractFromTXT(buffer: Buffer): string {
-  return new TextDecoder('utf-8').decode(buffer);
-}
-
-// ── Main Controller ────────────────────────────────────────────────────────
+// @ts-ignore - TS1192: pdf-parse lacks a default export in some TS configurations. 
+// If you prefer, you can enable 'esModuleInterop' in your tsconfig.json.
+import pdfParse from 'pdf-parse';
+import mammoth from 'mammoth';
 
 /**
- * Main entry point for parsing uploaded resume files.
- * Handles buffer extraction, format routing, and security sanitization.
+ * Normalizes extracted text to prevent parsing hallucinations and reduce token count.
+ * - Removes null characters
+ * - Standardizes line endings
+ * - Collapses excessive horizontal whitespace
+ * - Limits consecutive newlines
  */
-export async function parseResumeFile(file: File): Promise<FileParseResult> {
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
+function normalizeText(text: string): string {
+  return text
+    .replace(/\u0000/g, '') // Strip null bytes
+    .replace(/\r\n/g, '\n') // Standardize line endings
+    .replace(/[^\S\r\n]+/g, ' ') // Collapse multiple spaces into one (preserve newlines)
+    .replace(/\n{3,}/g, '\n\n') // Collapse 3+ newlines into maximum 2
+    .trim();
+}
 
-  // Filename is passed so ODT can be told apart from DOCX — both are ZIP
-  // containers with identical magic bytes. Without it every .odt was routed
-  // to mammoth, which throws on OpenDocument.
-  const detectedFormat = detectFileFormatFromBuffer(buffer, file.name);
-  let rawText = '';
+/**
+ * Extracts raw text from a document buffer.
+ * 
+ * @param buffer The file data as a Node.js Buffer
+ * @param mimeType The MIME type of the uploaded file
+ * @param filename The original filename (used as a fallback for type detection)
+ * @returns The cleaned, extracted text string
+ */
+export async function extractTextFromBuffer(
+  buffer: Buffer,
+  mimeType: string,
+  filename: string
+): Promise<string> {
+  let extractedText = '';
+  const lowerFilename = filename.toLowerCase();
 
-  switch (detectedFormat) {
-    case 'pdf':
-      rawText = await extractFromPDF(buffer);
-      break;
-    case 'docx':
-    case 'doc':
-      rawText = await extractFromDOCX(buffer);
-      break;
-    case 'txt':
-    case 'rtf':
-    default:
-      rawText = extractFromTXT(buffer);
-      break;
-  }
+  try {
+    // 1. PDF Extraction
+    if (mimeType === 'application/pdf' || lowerFilename.endsWith('.pdf')) {
+      // pdf-parse expects a Buffer
+      const pdfData = await pdfParse(buffer, {
+        // Disable page rendering/metadata logs to speed up extraction
+        // cspell:disable-next-line
+        pagerender: (pageData: any) => pageData.getTextContent().then((textContent: any) => {
+          let lastY, text = '';
+          for (const item of textContent.items) {
+            if (lastY == item.transform[5] || !lastY) {
+              text += item.str;
+            } else {
+              text += '\n' + item.str;
+            }
+            lastY = item.transform[5];
+          }
+          return text;
+        }),
+      });
+      extractedText = pdfData.text;
+    } 
+    
+    // 2. DOCX Extraction
+    else if (
+      // cspell:disable
+      mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      // cspell:enable
+      mimeType === 'application/msword' || // legacy .doc fallback
+      lowerFilename.endsWith('.docx') ||
+      lowerFilename.endsWith('.doc')
+    ) {
+      // Mammoth extracts DOCX XML into clean raw text
+      const result = await mammoth.extractRawText({ buffer });
+      extractedText = result.value;
+      
+      if (result.messages && result.messages.length > 0) {
+        console.warn(`[FileParser] Mammoth warnings for ${filename}:`, result.messages);
+      }
+    } 
+    
+    // 3. Plain Text / Rich Text Extraction
+    else if (
+      mimeType === 'text/plain' ||
+      mimeType === 'text/rtf' ||
+      lowerFilename.endsWith('.txt') ||
+      lowerFilename.endsWith('.rtf')
+    ) {
+      extractedText = buffer.toString('utf-8');
+    } 
+    
+    // 4. Unsupported
+    else {
+      throw new Error(`Unsupported file type. Received MIME: ${mimeType}`);
+    }
 
-  // Sanitize to prevent basic XSS or prompt injection artifacts
-  const cleanText = sanitizeInput(rawText);
+    if (!extractedText || extractedText.trim().length === 0) {
+      throw new Error('No readable text could be extracted from this document.');
+    }
 
-  if (!cleanText || cleanText.length < 50) {
+    return normalizeText(extractedText);
+
+  } catch (error) {
+    console.error(`[FileParser] Failed to extract text from ${filename}:`, error);
     throw new Error(
-      `Could not extract readable text from your ${detectedFormat.toUpperCase()} file. ` +
-        'Please ensure it contains actual text (not just images/scanned pages) and try again.'
+      error instanceof Error 
+        ? `Extraction failed: ${error.message}` 
+        : 'Unknown error occurred during document extraction'
     );
   }
-
-  return {
-    text: cleanText,
-    format: detectedFormat,
-    wordCount: estimateWordCount(cleanText),
-    metadata: {
-      sectionsDetected: detectSections(cleanText).join(','),
-      hasQuantifiedAchievements: String(hasQuantifiedAchievements(cleanText)),
-    },
-  };
 }
 
 /**
- * Validates a File object prior to processing.
+ * Convenience wrapper for Next.js App Router API Handlers receiving standard Web API File objects.
  */
-export function validateResumeUpload(file: File): FileValidationResult {
-  return validateResumeFile({
-    name: file.name,
-    type: file.type,
-    size: file.size,
-  });
-}
-
-/**
- * Returns a user-friendly format label for the UI.
- */
-export function getFormatLabel(format: FileFormat): string {
-  const labels: Record<FileFormat | string, string> = {
-    pdf: 'PDF',
-    docx: 'Word (DOCX)',
-    doc: 'Word (DOC)',
-    txt: 'Plain Text',
-    rtf: 'Rich Text',
-  };
-  return labels[format] || format.toUpperCase();
+export async function extractTextFromFile(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  
+  return extractTextFromBuffer(buffer, file.type, file.name);
 }

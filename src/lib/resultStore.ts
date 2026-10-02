@@ -1,134 +1,111 @@
 // src/lib/resultStore.ts
-// Server-side only. Persists a completed scan result behind an unguessable
-// token so it can be revisited at /r/<token>.
+// Token generation and persistence for shareable, revocable results.
 //
-// ── WHY THIS EXISTS ────────────────────────────────────────────────────────
-//
-// The product had no reason to return. You scan once, fix your resume, and
-// leave. That caps every revenue model, and it starves the two data moats
-// (outcome capture and market aggregation) that only fill when users come back.
-//
-// Full accounts would solve it, but they collide head-on with the privacy
-// position: "we never store your resume" is the strongest thing this product
-// says about itself, and it is the reason to trust it over Jobscan or Teal.
-//
-// This is the version that does not make that trade. A result link stores only
-// the ANALYSIS — score, keywords, suggestions — which contains no resume text
-// and has already passed through the PII stripper. It requires no account, no
-// email, and no identifier. The user holds the only reference.
-//
-// ── WHAT IS AND IS NOT STORED ──────────────────────────────────────────────
-// Stored:     ScanResult (score, grade, summary, keyword lists, suggestions)
-// NOT stored: the resume file, extracted resume text, the job description,
-//             IP address, user agent, or anything linking the result to a person
-//
-// A ScanResult is the model's OUTPUT. Keyword names come from the job
-// description, not from the candidate. Verify this holds if you ever add a
-// field to ScanResult — an "extractedSummary" of the resume, for example, would
-// break the guarantee and would need to be excluded here explicitly.
+// DESIGN PRINCIPLES:
+// 1. Privacy & Security: The URL token is the ONLY credential. It is generated using
+//    cryptographically secure random bytes. Results contain no raw resume text or PII.
+// 2. Ephemeral Storage: All records are stamped with an `expiresAt` date (30 days)
+//    to integrate with Firestore TTL policies for automatic hard deletion.
+// 3. Complete Revocation: Users must be able to manually trigger a hard delete of their
+//    data at any time using their token.
 
+import * as admin from 'firebase-admin';
 import { randomBytes } from 'crypto';
 import type { ScanResult } from '@/types';
 
-const KEY_PREFIX = 'res:v1:';
-
-/** 30 days. Long enough to hear back from an application, short enough that
- *  abandoned links expire on their own without a cleanup job. */
-const TTL_SECONDS = 60 * 60 * 24 * 30;
-
-type RedisClient = import('@upstash/redis').Redis;
-let redisPromise: Promise<RedisClient | null> | null = null;
-
-function getRedis(): Promise<RedisClient | null> {
-  if (redisPromise) return redisPromise;
-  redisPromise = (async () => {
-    const url = process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-    if (!url || !token) return null;
-    try {
-      const { Redis } = await import('@upstash/redis');
-      return new Redis({ url, token });
-    } catch {
-      return null;
-    }
-  })();
-  return redisPromise;
-}
-
-export interface StoredResult {
-  result: ScanResult;
-  /** Role slug the user selected, if any. Not personal data. */
-  roleSlug: string | null;
-  createdAt: string;
-}
-
-/**
- * 192 bits of entropy, base64url. Long enough that enumeration is not a
- * realistic attack — this is the only thing protecting a result, so it must not
- * be shortened for prettier URLs.
- */
-export function generateResultToken(): string {
-  return randomBytes(24).toString('base64url');
-}
-
-/** Token shape check. Rejects path traversal and oversized keys before any I/O. */
-export function isValidToken(token: string): boolean {
-  return /^[A-Za-z0-9_-]{32}$/.test(token);
-}
-
-export async function saveResult(
-  token: string,
-  result: ScanResult,
-  roleSlug: string | null,
-): Promise<boolean> {
-  const redis = await getRedis();
-  if (!redis) return false; // no Upstash configured — links are simply unavailable
-
-  const payload: StoredResult = {
-    result,
-    roleSlug,
-    createdAt: new Date().toISOString(),
-  };
-
+// Safely initialize Firebase Admin for serverless environments
+if (!admin.apps.length) {
   try {
-    await redis.set(KEY_PREFIX + token, payload, { ex: TTL_SECONDS });
-    return true;
-  } catch {
-    return false;
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        // Handle escaped newline characters from environment variables
+        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+      }),
+    });
+  } catch (error) {
+    console.error('[ResultStore] Firebase Admin initialization error:', error);
   }
 }
 
-export async function loadResult(token: string): Promise<StoredResult | null> {
-  if (!isValidToken(token)) return null;
+const db = admin.apps.length ? admin.firestore() : null;
+const COLLECTION_NAME = 'scan_results';
 
-  const redis = await getRedis();
-  if (!redis) return null;
+/**
+ * Generates a secure token and saves the anonymized scan result to the database.
+ * 
+ * @param result The processed ScanResult object (must be pre-stripped of PII)
+ * @returns The secure hex token used to retrieve the result
+ */
+export async function saveResult(result: ScanResult): Promise<string> {
+  if (!db) {
+    throw new Error('Database connection is not initialized. Cannot save result.');
+  }
+
+  // Generate a cryptographically secure 32-character hex string token
+  const token = randomBytes(16).toString('hex');
+  
+  // Set an explicit expiration date 30 days in the future
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + 30);
+
+  await db.collection(COLLECTION_NAME).doc(token).set({
+    ...result,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    expiresAt: admin.firestore.Timestamp.fromDate(expiresAt),
+  });
+
+  return token;
+}
+
+/**
+ * Retrieves a scan result by its secure token. 
+ * Automatically enforces expiration even if the Firestore TTL job is delayed.
+ * 
+ * @param token The 32-character hex token
+ * @returns The ScanResult object, or null if expired/not found
+ */
+export async function getResult(token: string): Promise<ScanResult | null> {
+  if (!db || !token || typeof token !== 'string') return null;
 
   try {
-    return (await redis.get<StoredResult>(KEY_PREFIX + token)) ?? null;
-  } catch {
+    const doc = await db.collection(COLLECTION_NAME).doc(token).get();
+    
+    if (!doc.exists) {
+      return null;
+    }
+    
+    const data = doc.data();
+    
+    // Failsafe: Enforce expiration at read-time in case the background TTL sweeper is lagging
+    if (data?.expiresAt && data.expiresAt.toDate() < new Date()) {
+      return null;
+    }
+
+    // Strip out database-specific metadata before returning to the client
+    const { createdAt, expiresAt, ...safeResult } = data as any;
+    return safeResult as ScanResult;
+  } catch (error) {
+    console.error(`[ResultStore] Failed to retrieve token ${token}:`, error);
     return null;
   }
 }
 
 /**
- * Delete a stored result.
- *
- * Anyone holding the token can delete it. That is deliberate: the token IS the
- * credential, there is no account to authenticate against, and the alternative
- * — no delete at all — would be worse. A user who shared a link and regrets it
- * must be able to revoke it.
+ * Permanently revokes (hard deletes) a scan result from the database.
+ * 
+ * @param token The 32-character hex token
+ * @returns boolean indicating success or failure
  */
 export async function deleteResult(token: string): Promise<boolean> {
-  if (!isValidToken(token)) return false;
-
-  const redis = await getRedis();
-  if (!redis) return false;
-
+  if (!db || !token || typeof token !== 'string') return false;
+  
   try {
-    await redis.del(KEY_PREFIX + token);
+    await db.collection(COLLECTION_NAME).doc(token).delete();
     return true;
-  } catch {
+  } catch (error) {
+    console.error(`[ResultStore] Failed to delete token ${token}:`, error);
     return false;
   }
 }
