@@ -1,0 +1,14 @@
+{
+  "indexes": [
+    {
+      "_comment": "Required by getRoleInsight() in lib/marketIntel.ts, which filters scan_analytics by roleSlug and a createdAt window. Without this the query throws FAILED_PRECONDITION and the insights page renders 'unavailable'. Deploy with: firebase deploy --only firestore:indexes",
+      "collectionGroup": "scan_analytics",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "roleSlug", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

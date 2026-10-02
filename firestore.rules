@@ -1,0 +1,62 @@
+rules_version = '2';
+
+// ATS Scanner Pro — Firestore security rules
+//
+// WHY THIS FILE WAS REWRITTEN
+// The previous rules were the unmodified Firebase test-mode default:
+//
+//     allow read, write: if request.time < timestamp.date(2026, 6, 6);
+//
+// Two consequences, both live in production:
+//
+//   1. UNTIL 6 June 2026 the entire database was world-readable AND
+//      world-writable by anyone who knew the project ID — and the project ID
+//      ships to the browser in NEXT_PUBLIC_FIREBASE_PROJECT_ID. Any visitor
+//      could read every scan_analytics document or wipe the collections.
+//      Treat that data as having been publicly exposed.
+//
+//   2. THAT DATE HAS NOW PASSED, so every client request is currently DENIED.
+//      All analytics writes in lib/analytics.ts are failing right now. They are
+//      wrapped in empty catch blocks, so the failure is completely silent and
+//      you have been collecting nothing.
+//
+// The fix is twofold: lock the rules (below) AND move server-side writes to the
+// Firebase Admin SDK, which bypasses rules legitimately. See src/lib/analytics.ts.
+//
+// Rules apply to client SDK traffic only. Admin SDK traffic is never evaluated
+// against them, so denying everything here does not break server telemetry.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Telemetry is written exclusively by the server via the Admin SDK and read
+    // exclusively from the Firebase console or a trusted backend. No browser
+    // should ever touch these collections.
+    match /scan_analytics/{doc} {
+      allow read, write: if false;
+    }
+
+    match /market_signals/{doc} {
+      allow read, write: if false;
+    }
+
+    match /page_views/{doc} {
+      allow read, write: if false;
+    }
+
+    // Self-reported application outcomes. Written by the server via
+    // /api/outcome using the Admin SDK. This is the dataset the score
+    // calibration rests on, so direct client writes must stay closed —
+    // an open collection here could be poisoned trivially.
+    match /scan_outcomes/{doc} {
+      allow read, write: if false;
+    }
+
+    // Default deny for everything else. Add an explicit match block above when
+    // you introduce a collection that genuinely needs client access, and never
+    // widen this catch-all.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
