@@ -42,3 +42,10 @@ next-env.d.ts
 
 .vercel
 .env*
+
+# credentials — never commit
+*firebase-adminsdk*.json
+*service-account*.json
+*.key
+tsconfig.tsbuildinfo
+public/vendor/

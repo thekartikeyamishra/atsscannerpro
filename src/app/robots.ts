@@ -1,24 +1,18 @@
 import type { MetadataRoute } from 'next';
-import { SITE_URL } from '@/lib/seo';
+import { SITE } from '@/config/site';
 
-// NOTE: /public/robots.txt must be DELETED — it shadows this route entirely.
-// Having both means edits here silently do nothing.
+// Search engines and AI assistants are welcome: being cited by them is how
+// people find a free tool. Only the API is off-limits.
+const AI_AGENTS = ['GPTBot', 'OAI-SearchBot', 'ChatGPT-User', 'ClaudeBot', 'Claude-User', 'Claude-SearchBot', 'PerplexityBot', 'Perplexity-User', 'Google-Extended', 'Applebot-Extended', 'Bingbot', 'DuckAssistBot', 'CCBot', 'meta-externalagent', 'Amazonbot', 'cohere-ai', 'MistralAI-User'];
 
 export default function robots(): MetadataRoute.Robots {
   return {
     rules: [
-      {
-        userAgent: '*',
-        allow: '/',
-        // Only build artefacts and the API. Never block CSS/JS: Google needs to
-        // render the page to see the content.
-        disallow: ['/api/', '/_next/'],
-      },
-      // AdSense crawlers need full access to classify pages for ad targeting.
+      { userAgent: '*', allow: '/', disallow: ['/api/'] },
       { userAgent: 'Mediapartners-Google', allow: '/' },
-      { userAgent: 'AdsBot-Google', allow: '/' },
+      { userAgent: AI_AGENTS, allow: '/', disallow: ['/api/'] },
     ],
-    sitemap: `${SITE_URL}/sitemap.xml`,
-    host: SITE_URL,
+    sitemap: `${SITE.url}/sitemap.xml`,
+    host: SITE.url,
   };
 }

@@ -1,109 +1,85 @@
-// src/app/api/waitlist/route.ts
-//
-// Webhook for capturing invite-only mobile app waitlist leads.
-// Uses the Admin SDK lazy-initialization pattern to bypass client security 
-// rules and write securely to the `waitlist_leads` collection.
+// POST /api/waitlist — invite-list signups for the mobile app.
+// Stores the minimum: email, platform, optional role, consent time, source.
+// No IP address is stored; it's only used (hashed, in memory or Redis) for rate limiting.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { checkRateLimit, getClientIP } from '@/lib/rateLimiter';
+import { rateLimit } from '@/lib/server/rateLimit';
 
 export const dynamic = 'force-dynamic';
 
-// ── Admin SDK (lazy, single init) ───────────────────────────────────────────
 type Firestore = import('firebase-admin/firestore').Firestore;
-
 let dbPromise: Promise<Firestore | null> | null = null;
 
 function getDb(): Promise<Firestore | null> {
   if (dbPromise) return dbPromise;
-
   dbPromise = (async () => {
     const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-    if (!raw) {
-      console.warn('[waitlist] FIREBASE_SERVICE_ACCOUNT_KEY is not set. Leads will not be saved.');
-      return null;
-    }
-
+    if (!raw) return null;
     try {
-      const [{ getApps, initializeApp, cert }, { getFirestore }] = await Promise.all([
-        import('firebase-admin/app'),
-        import('firebase-admin/firestore'),
-      ]);
-
-      const json = raw.trim().startsWith('{')
-        ? raw
-        : Buffer.from(raw, 'base64').toString('utf-8');
-      
-      const app =
-        getApps().find((a) => a.name === 'analytics') ??
-        initializeApp({ credential: cert(JSON.parse(json)) }, 'analytics');
-
+      const [{ getApps, initializeApp, cert }, { getFirestore }] = await Promise.all([import('firebase-admin/app'), import('firebase-admin/firestore')]);
+      const json = raw.trim().startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+      const app = getApps().find((a) => a.name === 'waitlist') ?? initializeApp({ credential: cert(JSON.parse(json)) }, 'waitlist');
       return getFirestore(app);
     } catch (err) {
-      console.warn(`[waitlist] Failed to initialise Admin SDK: ${err instanceof Error ? err.message : 'unknown error'}`);
+      console.error('[waitlist] Firebase Admin init failed:', err instanceof Error ? err.message : err);
       return null;
     }
   })();
-
   return dbPromise;
 }
 
-// ── POST /api/waitlist ──────────────────────────────────────────────────────
-export async function POST(request: NextRequest) {
+const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,24}$/i;
+const PLATFORMS = new Set(['android', 'ios', 'both']);
+
+export async function POST(req: NextRequest) {
+  let body: Record<string, unknown>;
   try {
-    let body: { email?: unknown; platform?: unknown; source?: unknown };
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON payload.' }, { status: 400 });
-    }
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
+  }
 
-    const { email, platform, source } = body;
+  // Bots fill the hidden field; pretend success so they move on.
+  if (typeof body.website === 'string' && body.website.trim()) return NextResponse.json({ ok: true });
 
-    // 1. Validate Input
-    if (!email || typeof email !== 'string' || !/^\S+@\S+\.\S+$/.test(email)) {
-      return NextResponse.json({ error: 'Please provide a valid email address.' }, { status: 400 });
-    }
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+  if (!EMAIL.test(email)) return NextResponse.json({ error: 'Enter a valid email address.' }, { status: 400 });
+  if (body.consent !== true) return NextResponse.json({ error: 'Please confirm we can email you.' }, { status: 400 });
 
-    // 2. Strict Rate Limiting (Prevent waitlist spamming)
-    // 5 attempts per hour per IP
-    const ip = getClientIP(request);
-    const limit = await checkRateLimit(`waitlist:${ip}`, 5, 60 * 60 * 1000);
+  const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0].trim() || 'unknown';
+  const limit = await rateLimit(`waitlist:${ip}`, 5, 60 * 60);
+  if (!limit.ok) {
+    return NextResponse.json({ error: 'Too many attempts. Try again later.' }, { status: 429, headers: { 'Retry-After': String(limit.retryAfter) } });
+  }
 
-    if (!limit.allowed) {
-      const retryAfterSec = Math.ceil((limit.resetAt - Date.now()) / 1000);
-      return NextResponse.json(
-        { error: 'Too many requests. Please try again later.' },
-        { 
-          status: 429, 
-          headers: { 
-            'Retry-After': String(retryAfterSec),
-            'Cache-Control': 'no-store'
-          } 
-        }
-      );
-    }
+  const db = await getDb();
+  if (!db) {
+    console.error('[waitlist] FIREBASE_SERVICE_ACCOUNT_KEY is not set — signup NOT saved.');
+    return NextResponse.json({ error: 'The invite list is temporarily unavailable. Please email us instead.' }, { status: 503 });
+  }
 
-    // 3. Write to Firestore
-    const db = await getDb();
-    if (db) {
-      const cleanEmail = email.toLowerCase().trim();
-      
-      // Use email as document ID to naturally prevent duplicate entries, 
-      // but use merge: true to update their platform interest if they re-apply.
-      await db.collection('waitlist_leads').doc(cleanEmail).set({
-        email: cleanEmail,
-        platform: typeof platform === 'string' ? platform.slice(0, 50) : 'unknown',
-        source: typeof source === 'string' ? source.slice(0, 50) : 'web',
-        lastUpdated: new Date(),
-      }, { merge: true });
-    }
+  const platform = typeof body.platform === 'string' && PLATFORMS.has(body.platform) ? body.platform : 'android';
+  const role = typeof body.role === 'string' ? body.role.replace(/[<>]/g, '').trim().slice(0, 60) : '';
+  const source = typeof body.source === 'string' ? body.source.replace(/[^\w-]/g, '').slice(0, 30) : 'web';
 
-    // Return 200 OK even if DB is missing (graceful fallback for UI during local dev)
+  try {
+    const ref = db.collection('waitlist_leads').doc(email);
+    const snap = await ref.get();
+    await ref.set(
+      {
+        email,
+        platform,
+        role,
+        source,
+        consentAt: new Date(),
+        updatedAt: new Date(),
+        ...(snap.exists ? {} : { createdAt: new Date(), invited: false }),
+      },
+      { merge: true },
+    );
     return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
-
   } catch (err) {
-    console.error('[waitlist] Processing error:', err);
-    return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
+    console.error('[waitlist] write failed:', err instanceof Error ? err.message : err);
+    return NextResponse.json({ error: 'We couldn\'t save that. Please try again.' }, { status: 500 });
   }
 }

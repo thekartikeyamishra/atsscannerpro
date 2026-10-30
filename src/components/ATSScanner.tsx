@@ -1,6 +1,4 @@
 'use client';
-// components/ATSScanner.tsx — Main ATS scanner orchestrator
-// AI: Google Gemini 2.5 Flash (fallback gemini-2.5-flash-lite) — see lib/gemini.ts
 
 import { useState, useEffect, useRef } from 'react';
 import FileUpload from './FileUpload';
@@ -8,19 +6,10 @@ import ScoreDial from './ScoreDial';
 import ResultsPanel from './ResultsPanel';
 import { ResultsAd } from './AdUnit';
 import ResultLinkActions from './ResultLinkActions';
-import {
-  addToHistory,
-  jdFingerprint,
-  getProgressForJD,
-  type Progress,
-} from '@/lib/scanHistory';
-import type { ScanResult } from '@/types/index';
-import { roles } from '@/lib/rolesData';
+import { saveScanToHistory } from '@/lib/scanHistory';
+import type { ScanResult, ParseFinding } from '@/types/index';
+import { getAllRoles } from '@/lib/rolesData';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-// Every line here is either mechanically true of document parsing or a
-// statement about how THIS tool scores.
 const LOADING_TIPS = [
   '🔑 Mirror the exact wording of the job description — parsers match strings, not intent.',
   '📋 Single-column layouts extract most reliably. Multi-column text can interleave.',
@@ -34,7 +23,6 @@ const LOADING_TIPS = [
   '💾 Export as PDF from a word processor, not a scan or screenshot — scans have no text layer.',
 ];
 
-// Each stage corresponds to a step that actually happens.
 const STAGES = {
   IDLE:      { pct: 0,   label: '' },
   SENDING:   { pct: 12,  label: 'Uploading your resume…' },
@@ -44,7 +32,6 @@ const STAGES = {
 
 type StageKey = keyof typeof STAGES;
 
-// ── Confetti celebration ──────────────────────────────────────────────────────
 const CONFETTI_PARTICLES = [
   { left: 5,  dur: 960,  rot: -22, w: 5, h: 7 },
   { left: 11, dur: 1050, rot: 15,  w: 7, h: 5 },
@@ -89,7 +76,6 @@ function Confetti() {
   );
 }
 
-// ── Score message ─────────────────────────────────────────────────────────────
 function ScoreMessage({ score }: { score: number }) {
   const cfg =
     score >= 80 ? { msg: '🎉 Excellent match! High interview probability.', cls: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' }
@@ -104,7 +90,6 @@ function ScoreMessage({ score }: { score: number }) {
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
 interface ATSScannerProps {
   initialRole?: string;
 }
@@ -114,6 +99,7 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
   const [jobDescription, setJobDescription] = useState('');
   const [selectedRole, setSelectedRole]     = useState(initialRole);
   const [result, setResult]           = useState<ScanResult | null>(null);
+  const [scanToken, setScanToken]     = useState<string | null>(null);
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState<string | null>(null);
   const [progress, setProgress]       = useState(0);
@@ -121,9 +107,9 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
   const [tipIndex, setTipIndex]       = useState(0);
   const [showConfetti, setShowConfetti] = useState(false);
   const [retryAfter, setRetryAfter]   = useState<number | null>(null);
-  const [progressVsLast, setProgressVsLast] = useState<Progress | null>(null);
-  const [degradedReport, setDegradedReport] = useState<ScanResult['parseReport'] | null>(null);
+  const [degradedReport, setDegradedReport] = useState<ParseFinding[] | null>(null);
 
+  const availableRoles = getAllRoles();
   const canScan = !!file && jobDescription.trim().length >= 50 && !loading;
   const jdLength = jobDescription.length;
 
@@ -140,6 +126,7 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
     setLoading(true);
     setError(null);
     setResult(null);
+    setScanToken(null);
     setProgress(0);
     setRetryAfter(null);
     setShowConfetti(false);
@@ -163,15 +150,18 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
       fd.append('jobDescription', jobDescription);
       if (selectedRole) fd.append('role', selectedRole);
 
-      const res  = await fetch('/api/scan', { method: 'POST', body: fd });
-      const data = await res.json() as ScanResult & {
+      const res = await fetch('/api/scan', { method: 'POST', body: fd });
+      const resData = await res.json();
+      
+      const token = resData.token || resData.resultToken || null;
+      const data = (resData.result ? resData.result : resData) as ScanResult & {
         error?: string;
         retryAfter?: number;
         degraded?: boolean;
       };
 
-      if (!res.ok && data?.degraded && data?.parseReport) {
-        setDegradedReport(data.parseReport);
+      if (!res.ok && resData.degraded && data.formattingFindings) {
+        setDegradedReport(data.formattingFindings);
         setError(data.error ?? 'Keyword analysis is unavailable right now.');
         if (typeof data.retryAfter === 'number') setRetryAfter(data.retryAfter);
         return;
@@ -187,17 +177,15 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
       setProgress(100);
       await new Promise(r => setTimeout(r, 350));
 
-      const jdKey = jdFingerprint(jobDescription);
-      setProgressVsLast(getProgressForJD(jdKey, data.score));
-
-      addToHistory({
-        token: data.resultToken ?? null,
-        score: data.score,
-        grade: data.grade,
-        roleSlug: selectedRole || null,
-        jdKey,
-        scannedAt: new Date().toISOString(),
-      });
+      if (token) {
+        setScanToken(token);
+        saveScanToHistory({
+          token,
+          score: data.score,
+          grade: data.grade,
+          roleTitle: data.roleTitle || selectedRole || 'Unknown Role',
+        });
+      }
 
       setResult(data);
 
@@ -238,6 +226,7 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
     setJobDescription('');
     setSelectedRole('');
     setResult(null);
+    setScanToken(null);
     setDegradedReport(null);
     setError(null);
     setProgress(0);
@@ -251,7 +240,6 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
       <div className="glass-card-elevated rounded-3xl overflow-hidden relative">
         {showConfetti && <Confetti />}
 
-        {/* ── Card header ───────────────────────────────────────────── */}
         <div className="px-6 pt-6 pb-0 flex items-start justify-between">
           <div>
             <h2 className="text-xl font-bold font-syne text-white flex items-center gap-2.5">
@@ -281,16 +269,13 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
 
         <div className="p-6 space-y-5">
           {!result ? (
-            /* ── INPUT FORM ────────────────────────────────────────── */
             <>
-              {/* 1. File upload */}
               <FileUpload
                 onFileSelect={setFile}
                 selectedFile={file}
                 disabled={loading}
               />
 
-              {/* 2. Role selector */}
               <div>
                 <label htmlFor="role-select" className="block text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-2">
                   Target Role
@@ -304,13 +289,12 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
                   className="input-field w-full"
                 >
                   <option value="">Select your target role for tailored analysis…</option>
-                  {roles.map((r: { slug: string; title: string }) => (
+                  {availableRoles.map(r => (
                     <option key={r.slug} value={r.slug}>{r.title}</option>
                   ))}
                 </select>
               </div>
 
-              {/* 3. Job description */}
               <div>
                 <label htmlFor="jd-input" className="block text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-2">
                   Job Description
@@ -340,7 +324,6 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
                 </div>
               </div>
 
-              {/* Rate limit warning */}
               {retryAfter !== null && (
                 <div className="flex items-start gap-2.5 p-3.5 bg-yellow-500/8 border border-yellow-500/20 rounded-xl animate-fade-in" role="alert">
                   <svg className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
@@ -353,7 +336,6 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
                 </div>
               )}
 
-              {/* Error */}
               {error && (
                 <div className="flex items-start gap-2.5 p-3.5 bg-red-500/8 border border-red-500/20 rounded-xl animate-fade-in" role="alert">
                   <svg className="w-4 h-4 text-red-400 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
@@ -363,19 +345,15 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
                 </div>
               )}
 
-              {/* Partial results. */}
-              {degradedReport && degradedReport.findings.length > 0 && (
+              {degradedReport && degradedReport.length > 0 && (
                 <div className="space-y-2 animate-fade-in">
                   <div className="flex items-baseline justify-between">
                     <h3 className="text-sm font-semibold text-white">
-                      Formatting check{' '}
-                      <span className="text-slate-500 font-normal">
-                        ({degradedReport.parseScore}/100)
-                      </span>
+                      Formatting check
                     </h3>
                     <span className="text-[11px] text-slate-600">Keyword analysis unavailable</span>
                   </div>
-                  {degradedReport.findings.slice(0, 6).map(f => (
+                  {degradedReport.slice(0, 6).map(f => (
                     <div
                       key={f.code}
                       className="p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]"
@@ -394,7 +372,6 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
                 </div>
               )}
 
-              {/* Scan button */}
               <button
                 onClick={handleScan}
                 disabled={!canScan}
@@ -421,7 +398,6 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
                 )}
               </button>
 
-              {/* Progress */}
               {loading && (
                 <div className="space-y-2.5 animate-fade-in">
                   <div className="space-y-1.5">
@@ -439,7 +415,6 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
                 </div>
               )}
 
-              {/* Trust signals */}
               {!loading && (
                 <div className="flex flex-wrap gap-x-5 gap-y-1.5 justify-center pt-1">
                   {['No sign-up', 'PII never stored', 'Free forever', '~10s results'].map(t => (
@@ -454,9 +429,7 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
               )}
             </>
           ) : (
-            /* ── RESULTS VIEW ──────────────────────────────────────── */
             <div className="space-y-5 animate-fade-in">
-              {/* Score + quick stats */}
               <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
                 <div className="shrink-0">
                   <ScoreDial score={result.score} grade={result.grade} animated size="md" />
@@ -464,9 +437,9 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
                 <div className="flex-1 w-full space-y-3 min-w-0">
                   <div className="grid grid-cols-3 gap-2">
                     {[
-                      { label: 'Matched',  val: result.matchedKeywords.length,  color: '#10B981', bg: 'rgba(16,185,129,0.08)'  },
-                      { label: 'Missing',  val: result.missingKeywords.length,  color: '#EF4444', bg: 'rgba(239,68,68,0.08)'   },
-                      { label: 'Warnings', val: result.atsWarnings.length,      color: '#F59E0B', bg: 'rgba(245,158,11,0.08)'  },
+                      { label: 'Matched',  val: result.foundKeywords?.length || 0,  color: '#10B981', bg: 'rgba(16,185,129,0.08)'  },
+                      { label: 'Missing',  val: result.missingKeywords?.length || 0,  color: '#EF4444', bg: 'rgba(239,68,68,0.08)'   },
+                      { label: 'Warnings', val: result.formattingFindings?.length || 0,      color: '#F59E0B', bg: 'rgba(245,158,11,0.08)'  },
                     ].map(stat => (
                       <div
                         key={stat.label}
@@ -480,43 +453,16 @@ export default function ATSScanner({ initialRole = '' }: ATSScannerProps) {
                       </div>
                     ))}
                   </div>
-                  {progressVsLast?.delta != null && progressVsLast.delta !== 0 && (
-                    <div
-                      className={`flex items-center gap-2 p-3 rounded-xl border ${
-                        progressVsLast.delta > 0
-                          ? 'bg-emerald-500/8 border-emerald-500/20'
-                          : 'bg-red-500/8 border-red-500/20'
-                      }`}
-                      role="status"
-                    >
-                      <span
-                        className={`text-lg font-black font-syne ${
-                          progressVsLast.delta > 0 ? 'text-emerald-400' : 'text-red-400'
-                        }`}
-                      >
-                        {progressVsLast.delta > 0 ? '+' : ''}{progressVsLast.delta}
-                      </span>
-                      <span className="text-xs text-slate-400 leading-snug">
-                        {progressVsLast.delta > 0 ? 'better' : 'lower'} than your last scan of this
-                        job (attempt {progressVsLast.attempt})
-                      </span>
-                    </div>
-                  )}
 
                   <ScoreMessage score={result.score} />
                 </div>
               </div>
 
-              {/* Ad — post-results (peak engagement) */}
               <ResultsAd />
-
-              {/* Full results tabs */}
               <ResultsPanel result={result} />
+              
+              {scanToken && <ResultLinkActions token={scanToken} />}
 
-              {/* Only rendered when Upstash is configured and a link was saved. */}
-              {result.resultToken && <ResultLinkActions token={result.resultToken} />}
-
-              {/* Re-scan CTA */}
               <div className="text-center pt-1">
                 <p className="text-xs text-slate-600 mb-2">
                   Updated your resume? Re-scan to track your improvement.

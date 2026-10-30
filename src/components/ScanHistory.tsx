@@ -8,10 +8,10 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getHistory, clearHistory, type HistoryEntry } from '@/lib/scanHistory';
+import { getScanHistory, clearScanHistory, type ScanHistoryItem } from '@/lib/scanHistory';
 
-function formatDate(iso: string): string {
-  const d = new Date(iso);
+function formatDate(timestamp: number): string {
+  const d = new Date(timestamp);
   if (Number.isNaN(d.getTime())) return '';
   // Explicit locale + UTC: toLocaleDateString() with no arguments renders
   // differently on the server and in the browser.
@@ -23,10 +23,10 @@ function formatDate(iso: string): string {
 }
 
 export default function ScanHistory({ className = '' }: { className?: string }) {
-  const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
+  const [entries, setEntries] = useState<ScanHistoryItem[] | null>(null);
 
   useEffect(() => {
-    setEntries(getHistory());
+    setEntries(getScanHistory());
   }, []);
 
   // null = not yet mounted. Matches the server render exactly.
@@ -39,7 +39,7 @@ export default function ScanHistory({ className = '' }: { className?: string }) 
         <button
           type="button"
           onClick={() => {
-            clearHistory();
+            clearScanHistory();
             setEntries([]);
           }}
           className="text-xs text-slate-600 hover:text-slate-400 transition-colors"
@@ -53,8 +53,8 @@ export default function ScanHistory({ className = '' }: { className?: string }) 
 
       <ol className="space-y-2" role="list">
         {entries.slice(0, 8).map((entry, i) => {
-          // Compare against the next OLDER scan of the same job description.
-          const older = entries.slice(i + 1).find((e) => e.jdKey === entry.jdKey);
+          // Compare against the next OLDER scan of the same role title.
+          const older = entries.slice(i + 1).find((e) => e.roleTitle === entry.roleTitle);
           const delta = older ? entry.score - older.score : null;
 
           const row = (
@@ -78,14 +78,14 @@ export default function ScanHistory({ className = '' }: { className?: string }) 
               )}
 
               <span className="text-xs text-slate-500 truncate flex-1">
-                {entry.roleSlug ? entry.roleSlug.replace(/-/g, ' ') : 'No role selected'}
+                {entry.roleTitle || 'No role selected'}
               </span>
-              <span className="text-xs text-slate-600 shrink-0">{formatDate(entry.scannedAt)}</span>
+              <span className="text-xs text-slate-600 shrink-0">{formatDate(entry.timestamp)}</span>
             </div>
           );
 
           return (
-            <li key={`${entry.scannedAt}-${i}`}>
+            <li key={`${entry.timestamp}-${i}`}>
               {entry.token ? (
                 <Link href={`/r/${entry.token}`} className="block">
                   {row}

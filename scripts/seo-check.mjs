@@ -33,7 +33,7 @@ const PLACEHOLDER_PATTERNS = [
   /\bFIXME\b/,
   /YOUR_[A-Z_]+/,
   /\[(?:GOVERNING LAW|JURISDICTION|LEGAL ENTITY NAME|REGISTERED BUSINESS ADDRESS|SUPPORT EMAIL|RAZORPAY KEY ID|REFUND PERIOD)/i,
-  /undefined|NaN/,
+  /\bundefined\b|\bNaN\b/,
 ];
 
 // Statistics we removed for being unsourced. If one reappears, something
@@ -99,7 +99,8 @@ async function fetchSitemapUrls() {
   if (xml.includes('<sitemapindex')) {
     throw new Error('sitemap index files are not handled by this script yet');
   }
-  return [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].trim());
+  // Crawl the server we were pointed at, even when the sitemap lists the production domain.
+  return [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => { const u = new URL(m[1].trim()); return BASE + u.pathname + u.search; });
 }
 
 async function checkPage(url) {
@@ -165,11 +166,17 @@ async function checkPage(url) {
   if (noAlt > 0) warn(url, `${noAlt} <img> without alt`);
 
   // Placeholders and unsourced claims
+  // Check visible text only — the framework's inline data scripts contain "$undefined" tokens.
+  const visible = textContent(html);
   for (const p of PLACEHOLDER_PATTERNS) {
-    if (p.test(html)) err(url, `placeholder text present: ${p}`);
+    if (p.test(visible)) err(url, `placeholder text present: ${p}`);
   }
   for (const p of UNSOURCED_CLAIMS) {
-    if (p.test(html)) err(url, `unsourced statistic present: ${p} — source it or remove it`);
+    const m = visible.match(p);
+    // Allowed only where the page is debunking the claim.
+    if (m && !/myth|without a credible/i.test(visible.slice(Math.max(0, m.index - 200), m.index + 300))) {
+      err(url, `unsourced statistic present: ${p} — source it or remove it`);
+    }
   }
 
   return { url, title, desc, links: getInternalLinks(html), words };

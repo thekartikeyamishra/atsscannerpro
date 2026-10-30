@@ -1,247 +1,110 @@
-// src/app/methodology/page.tsx
-//
-// WHY THIS PAGE EXISTS
-// Three problems it solves at once:
-//
-//  1. AdSense low-value content. The site is a tool plus role pages. This is a
-//     substantive page that only this site can write, because it describes this
-//     site's own system.
-//  2. E-E-A-T. "Show your methodology" is the standard answer to "why should
-//     anyone trust your score?" — and you cannot honestly show a methodology
-//     while the product claims a precision it does not have.
-//  3. It is the page that lets you delete unsourced statistics elsewhere
-//     without losing credibility, because it replaces borrowed authority with
-//     your own transparency.
-//
-// EVERY claim here is checkable against the code. The grade bands come from
-// SYSTEM_PROMPT in lib/gemini.ts; the parsing behaviour from lib/fileParser.ts;
-// the PII list from lib/piiStripper.ts. If you change those files, change this
-// page — a methodology page that has drifted from the implementation is worse
-// than none at all.
-
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import Header from '@/components/Header';
-import Footer from '@/components/Footer';
-import SchemaMarkup from '@/components/SchemaMarkup';
-import { SITE_URL, buildArticleSchema, buildBreadcrumbSchema } from '@/lib/seo';
+import DocPage from '@/components/DocPage';
+import { LEXICON } from '@/lib/scan/lexicon';
+import { pageMeta } from '@/lib/seo';
 
-export const metadata: Metadata = {
-  title: 'How Our ATS Score Works — Methodology',
-  description:
-    'Exactly how ATS Scanner Pro calculates your score: what we measure, what the grade bands mean, what the score cannot tell you, and how your data is handled.',
-  alternates: { canonical: `${SITE_URL}/methodology` },
-  robots: { index: true, follow: true },
-  openGraph: {
-    title: 'How Our ATS Score Works — Methodology',
-    description:
-      'What ATS Scanner Pro measures, what the grades mean, and the limits of any ATS score.',
-    url: `${SITE_URL}/methodology`,
-    type: 'article',
-  },
-};
+export const metadata: Metadata = pageMeta({
+  title: 'How We Score Your Resume',
+  description: 'The exact formula behind the ATS Scanner Pro score: keyword weights, parsing penalties, section and impact points, and what the score can\'t tell you.',
+  path: '/methodology',
+});
 
-const GRADES = [
-  { grade: 'A+', range: '90–100', meaning: 'Very strong alignment. Most required terms present, clear structure.' },
-  { grade: 'A',  range: '80–89',  meaning: 'Strong. A few secondary terms missing.' },
-  { grade: 'B+', range: '70–79',  meaning: 'Good. Some important terms absent or only implied.' },
-  { grade: 'B',  range: '60–69',  meaning: 'Reasonable. Noticeable gaps against the posting.' },
-  { grade: 'C+', range: '50–59',  meaning: 'Mixed. Several critical terms missing.' },
-  { grade: 'C',  range: '40–49',  meaning: 'Weak alignment with this specific posting.' },
-  { grade: 'D',  range: '30–39',  meaning: 'Substantial gaps in coverage or structure.' },
-  { grade: 'F',  range: '0–29',   meaning: 'Little overlap with the posting, or text extraction largely failed.' },
-];
-
-const PIPELINE = [
-  {
-    n: '01',
-    title: 'Text extraction',
-    body: 'Your file is read in memory. PDFs go through pdf.js, DOCX through mammoth, plain text and RTF directly. We read the text layer only — we do not run OCR, so a scanned or photographed resume has no text to extract and will fail rather than return a misleading score.',
-  },
-  {
-    n: '02',
-    title: 'Personal information removal',
-    body: 'Before anything leaves our server we strip email addresses, phone numbers, LinkedIn/GitHub/social URLs, other personal URLs, postal addresses, Aadhaar and PAN numbers, passport-format identifiers, and the candidate name where it appears in the resume header. The same stripping runs on the job description, which often carries a recruiter\u2019s contact details.',
-  },
-  {
-    n: '03',
-    title: 'Structural checks',
-    body: 'We detect which standard sections are present (experience, skills, education, summary, certifications, projects), estimate length, and look for quantified achievements. This part is deterministic — the same document always produces the same result.',
-  },
-  {
-    n: '04',
-    title: 'Language model comparison',
-    body: 'The stripped resume and job description are sent to Google Gemini 2.5 Flash, with gemini-2.5-flash-lite as a fallback under load. A response schema constrains the output to a fixed structure. The model identifies matched terms, missing terms, and semantic equivalents — for example recognising that "people management" and "team leadership" describe the same thing.',
-  },
-  {
-    n: '05',
-    title: 'Score and grade',
-    body: 'The model returns a 0–100 score weighing keyword coverage, section structure, experience relevance, and formatting risk. We validate the value, clamp it to range, and derive the letter grade from the fixed bands below.',
-  },
-];
-
-const LIMITS = [
-  'There is no single ATS. Workday, Greenhouse, Taleo, Lever and the rest parse differently and rank differently. No external tool can compute "your real ATS score", and any product claiming to is describing its own heuristic, as we are describing ours.',
-  'Most applicant tracking systems do not actually auto-reject on a keyword score. They parse, store and let a recruiter search and filter. Poor parsing hurts because it makes you hard to find, not because a machine rejects you.',
-  'The score measures alignment between two documents. It cannot judge whether you are a good candidate, and a high score on a job you are unsuited for is not a useful signal.',
-  'A language model makes judgement calls. Run the same resume twice and the wording of suggestions may differ slightly, though the score is stable because generation temperature is set low.',
-  'We do not know which ATS your target employer uses, so formatting warnings describe general parsing risk, not certainties about a specific system.',
-];
-
-export default function MethodologyPage() {
-  const schemas = [
-    buildArticleSchema({
-      headline: 'How the ATS Scanner Pro score works',
-      description:
-        'The full methodology behind our ATS score: extraction, PII removal, structural checks, model comparison, grade bands, and stated limitations.',
-      path: '/methodology',
-    }),
-    buildBreadcrumbSchema([
-      { name: 'Home', path: '' },
-      { name: 'Methodology', path: '/methodology' },
-    ]),
-  ];
-
+export default function Methodology() {
   return (
-    <>
-      <SchemaMarkup schemas={schemas} />
-      <Header />
+    <DocPage
+      title="How we score your resume"
+      path="/methodology"
+      updated="2026-10-30"
+      lede="Every weight, every penalty, and the limits of the number. If you change your resume and the score moves, you should be able to work out why."
+    >
+      <h2 id="what-it-is">What the score is — and isn&apos;t</h2>
+      <p>
+        The ATS Scanner Pro score is our own estimate of how well a resume&apos;s text matches one job description and how cleanly the file is likely to parse. It is not the
+        score any employer&apos;s applicant tracking system would give you. Those systems are built by different vendors, configured by each employer, and their formulas aren&apos;t
+        public. Many don&apos;t produce a score at all.
+      </p>
+      <p>
+        What the score is good for: comparing versions of your resume against the <strong>same</strong> posting. What it isn&apos;t good for: comparing with scores from other
+        tools, or predicting whether you&apos;ll get an interview.
+      </p>
 
-      <main className="pt-24 pb-20 px-4">
-        <div className="max-w-2xl mx-auto">
-          <div className="mb-10">
-            <span className="badge mb-4 inline-flex">Methodology</span>
-            <h1 className="text-3xl sm:text-4xl font-black font-syne text-white leading-tight mb-4">
-              How our score works
-            </h1>
-            <p className="text-lg text-slate-400 leading-relaxed">
-              A score you can&apos;t interrogate isn&apos;t worth much. This page describes exactly
-              what happens to your resume, how the number is produced, and — just as
-              importantly — what it can&apos;t tell you.
-            </p>
-          </div>
+      <h2 id="formula">The formula (100 points)</h2>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr><th scope="col">Part</th><th scope="col">Points</th><th scope="col">How it&apos;s calculated</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Keywords</th><td>45</td><td>Weighted share of the posting&apos;s terms found in your resume (details below).</td></tr>
+            <tr><th scope="row">Parsing</th><td>20</td><td>Start at 20. Subtract 10 per critical finding, 4 per warning, 1 per minor note. Never below 0.</td></tr>
+            <tr><th scope="row">Bullet impact</th><td>15</td><td>Up to 9 for the share of bullets containing a number (full marks at 50%), up to 6 for the share opening with an action verb (full marks at 70%).</td></tr>
+            <tr><th scope="row">Job title</th><td>10</td><td>10 if the posting&apos;s title appears in your resume, 6 for a close version (most of its words), 0 if absent. 7 when we can&apos;t find a title in the posting.</td></tr>
+            <tr><th scope="row">Sections</th><td>10</td><td>Contact details 3, Experience 3, Education 2, Skills 2.</td></tr>
+          </tbody>
+        </table>
+      </div>
 
-          <section className="mb-12" aria-labelledby="pipeline-heading">
-            <h2 id="pipeline-heading" className="text-xl font-bold font-syne text-white mb-5">
-              What happens when you scan
-            </h2>
-            <div className="space-y-3">
-              {PIPELINE.map(step => (
-                <div key={step.n} className="glass-card rounded-xl p-5 flex gap-4">
-                  <span className="text-xs font-mono text-blue-400 shrink-0 pt-0.5">{step.n}</span>
-                  <div>
-                    <h3 className="font-semibold text-white text-sm mb-1.5">{step.title}</h3>
-                    <p className="text-sm text-slate-400 leading-relaxed">{step.body}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
+      <h2 id="keywords">How keywords are found and weighted</h2>
+      <p>
+        We split the job description into its sections and decide how strongly each term is asked for:
+      </p>
+      <ul>
+        <li><strong>Required</strong> (weight 3): in a requirements or qualifications section, on a line with words like &quot;must&quot;, &quot;required&quot; or &quot;X+ years&quot;, or mentioned three or more times anywhere.</li>
+        <li><strong>Nice to have</strong> (weight 1.5): under &quot;preferred&quot;, &quot;bonus&quot;, &quot;a plus&quot; or similar.</li>
+        <li><strong>Mentioned</strong> (weight 1): in the duties or introduction.</li>
+        <li>Benefits, salary and company boilerplate are ignored.</li>
+      </ul>
+      <p>
+        Terms come from a curated list of {LEXICON.length} skills, tools, methods and certifications across engineering, data, product, design, marketing, sales, finance,
+        HR, operations, healthcare and education. Each entry includes the common alternatives — &quot;k8s&quot; counts for Kubernetes, &quot;RESTful&quot; for REST APIs,
+        &quot;Search Engine Optimization&quot; for SEO. Words that are also ordinary English (Go, R, Excel, Swift) only count when capitalised and not at the start of a
+        sentence. We also pick up capitalised product names and repeated two-word phrases the list doesn&apos;t know.
+      </p>
+      <p>Then, for each term:</p>
+      <ul>
+        <li><strong>Found</strong> earns full credit — or 85% if it only appears in your skills list and never in a sentence or bullet.</li>
+        <li><strong>Similar wording</strong> (every word of a multi-word term is present in another form, such as &quot;managed stakeholders&quot; for &quot;stakeholder management&quot;) earns half credit.</li>
+        <li><strong>Missing</strong> earns nothing.</li>
+        <li>Soft skills such as &quot;communication&quot; count at half weight, because recruiters rarely search for them.</li>
+      </ul>
+      <p>
+        You can tap any term in the report to leave it out of the score — useful when the scanner picks up a word that isn&apos;t really a requirement.
+      </p>
 
-          <section className="mb-12" aria-labelledby="grades-heading">
-            <h2 id="grades-heading" className="text-xl font-bold font-syne text-white mb-3">
-              What each grade means
-            </h2>
-            <p className="text-sm text-slate-400 leading-relaxed mb-5">
-              Bands are fixed, so the same score always produces the same grade.
-            </p>
-            <div className="space-y-1.5">
-              {GRADES.map(g => (
-                <div
-                  key={g.grade}
-                  className="flex items-start gap-4 p-3 bg-white/[0.03] rounded-lg border border-white/[0.06]"
-                >
-                  <span className="font-black font-syne text-white text-sm w-8 shrink-0">{g.grade}</span>
-                  <span className="text-xs text-slate-500 font-mono w-16 shrink-0 pt-0.5">{g.range}</span>
-                  <span className="text-sm text-slate-400 leading-relaxed">{g.meaning}</span>
-                </div>
-              ))}
-            </div>
-          </section>
+      <h2 id="parsing">Parsing checks</h2>
+      <p>These come from the file itself, not from guesses:</p>
+      <ul>
+        <li><strong>Critical:</strong> almost no extractable text (scanned or image-based file); broken characters from unembedded fonts.</li>
+        <li><strong>Warnings:</strong> more than 25% of lines sitting side by side with another block (columns, measured from PDF text positions); tables (DOCX); no email; no standard Experience heading; few or no dates; fewer than 180 words; a key term repeated more than eight times.</li>
+        <li><strong>Minor:</strong> images; no phone; no Education or Skills heading; paragraphs instead of bullets; page numbers; icons used as labels; a generic file name; very long resumes.</li>
+      </ul>
+      <p>Each finding in the report is marked as measured or likely, so you know how much weight to give it.</p>
 
-          <section className="mb-12" aria-labelledby="limits-heading">
-            <h2 id="limits-heading" className="text-xl font-bold font-syne text-white mb-3">
-              What this score cannot tell you
-            </h2>
-            <p className="text-sm text-slate-400 leading-relaxed mb-5">
-              This section matters more than the one above it.
-            </p>
-            <ul className="space-y-3" role="list">
-              {LIMITS.map(limit => (
-                <li key={limit} className="flex gap-3 text-sm text-slate-400 leading-relaxed">
-                  <span className="text-slate-600 shrink-0 mt-0.5" aria-hidden="true">—</span>
-                  {limit}
-                </li>
-              ))}
-            </ul>
-          </section>
+      <h2 id="bands">Score bands</h2>
+      <ul>
+        <li><strong>80–100, strong:</strong> most required terms covered, clean file.</li>
+        <li><strong>65–79, good:</strong> a few important gaps.</li>
+        <li><strong>50–64, fair:</strong> several required terms missing or a formatting problem.</li>
+        <li><strong>Below 50, weak:</strong> not yet tailored, or a stretch role.</li>
+      </ul>
 
-          <section className="mb-12" aria-labelledby="claims-heading">
-            <h2 id="claims-heading" className="text-xl font-bold font-syne text-white mb-3">
-              On statistics
-            </h2>
-            <div className="text-sm text-slate-400 leading-relaxed space-y-3">
-              <p>
-                You will see figures repeated across this industry — that some fixed percentage of
-                resumes are auto-rejected, or that an optimised resume multiplies your interview
-                rate. We previously repeated a few of them ourselves. When we went looking for the
-                primary research behind them, we could not find it.
-              </p>
-              <p>
-                So we removed them. We would rather tell you how our own system works than borrow
-                authority from numbers we cannot source. Where we publish a statistic in future it
-                will carry a citation, a date, and a description of the sample.
-              </p>
-              <p>
-                If you find a claim anywhere on this site that isn&apos;t sourced, please{' '}
-                <Link href="/contact" className="text-blue-400 hover:text-blue-300 transition-colors">
-                  tell us
-                </Link>{' '}
-                and we will correct or remove it.
-              </p>
-            </div>
-          </section>
+      <h2 id="privacy">Where this runs</h2>
+      <p>
+        All of the above runs in your browser. Your resume and the job description aren&apos;t sent to us or to an AI model. The code that does it is the same for everyone;
+        there is no hidden premium scoring. Read more in the <Link href="/privacy">privacy policy</Link>.
+      </p>
 
-          <section className="mb-10" aria-labelledby="data-heading">
-            <h2 id="data-heading" className="text-xl font-bold font-syne text-white mb-3">
-              What we keep
-            </h2>
-            <div className="text-sm text-slate-400 leading-relaxed space-y-3">
-              <p>
-                Your file is never written to disk. Text is extracted in memory and discarded when
-                the request ends. We retain anonymised telemetry — score, grade, role category,
-                which sections were detected, and which keywords were commonly missing — with no
-                resume text and no contact details attached.
-              </p>
-              <p>
-                Results are cached for 24 hours against a SHA-256 hash of the stripped text, so
-                rescanning an unchanged document returns instantly without a second model call.
-                The hash is one-way: your resume cannot be reconstructed from it.
-              </p>
-              <p>
-                Automated redaction is thorough but not perfect. It cannot guarantee that every
-                identifier in every document format is caught. Full detail is in our{' '}
-                <Link href="/privacy" className="text-blue-400 hover:text-blue-300 transition-colors">
-                  Privacy Policy
-                </Link>
-                .
-              </p>
-            </div>
-          </section>
-
-          <div className="glass-card rounded-2xl p-6 text-center border border-blue-500/20 bg-blue-500/5">
-            <h2 className="font-bold text-white mb-2 font-syne">Now that you know how it works</h2>
-            <p className="text-slate-400 text-sm mb-4">
-              Scan your resume against a real posting and see the breakdown.
-            </p>
-            <Link href="/#scanner" className="btn-primary inline-flex px-5 py-2.5 rounded-xl text-sm font-bold">
-              Scan my resume
-            </Link>
-          </div>
-        </div>
-      </main>
-
-      <Footer />
-    </>
+      <h2 id="limits">Known limits</h2>
+      <ul>
+        <li>Unusual layouts can still extract in an odd order that we don&apos;t detect.</li>
+        <li>Content in Word headers, footers and text boxes isn&apos;t read — which is also true of many ATS parsers.</li>
+        <li>We match words, not meaning. If you describe a skill in completely different language, we&apos;ll mark it missing; so will a keyword search.</li>
+        <li>We don&apos;t judge whether your experience is good — only whether it&apos;s visible.</li>
+      </ul>
+      <p>
+        Found a case where the scanner gets it wrong? <Link href="/contact">Tell us</Link> — real examples are how the keyword list and checks improve.
+      </p>
+    </DocPage>
   );
 }

@@ -1,275 +1,182 @@
-// src/app/page.tsx — Homepage
-//
-// What this version does:
-// 1. Integrates the AppDownloadBanner to capture mobile waitlist intent.
-// 2. Implements grounded methodology rather than unsourced statistics.
-// 3. Mounts ScanHistory to establish a return-loop for users.
-// 4. Integrates the InContentAd unit for high-RPM editorial monetization.
-
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import ATSScanner from '@/components/ATSScanner';
-import ScanHistory from '@/components/ScanHistory';
-import Header from '@/components/Header';
-import Footer from '@/components/Footer';
-import FAQAccordion from '@/components/FAQAccordion';
-import SchemaMarkup from '@/components/SchemaMarkup';
-import { InContentAd } from '@/components/AdUnit';
-import AppDownloadBanner from '@/components/AppDownloadBanner';
-import { getAllRoles, getRoleBySlug } from '@/lib/rolesData';
-import { SITE_URL, buildWebSiteSchema, buildSoftwareAppSchema, buildFAQSchema } from '@/lib/seo';
+import AdSlot from '@/components/AdSlot';
+import AppButtons from '@/components/AppButtons';
+import Faq from '@/components/Faq';
+import HeroSheet from '@/components/HeroSheet';
+import InviteForm from '@/components/InviteForm';
+import JsonLd from '@/components/JsonLd';
+import Scanner from '@/components/scanner/Scanner';
+import { ADSENSE, SITE } from '@/config/site';
+import { GUIDES } from '@/content/guides';
+import { ROLES } from '@/content/roles';
+import { graph, pageMeta, webAppSchema } from '@/lib/seo';
 
 export const metadata: Metadata = {
-  title: 'Free ATS Resume Checker — Compare Your Resume to Any Job',
-  description:
-    'Upload your resume, paste a job description, and see which keywords match, which are missing, and what may stop it parsing correctly. Free, no sign-up, nothing stored.',
-  alternates: { canonical: SITE_URL },
+  ...pageMeta({
+    title: 'Free ATS Resume Checker — Compare Your Resume to Any Job',
+    description: SITE.description,
+    path: '/',
+  }),
+  title: { absolute: 'Free ATS Resume Checker: Compare Your Resume to Any Job' },
 };
 
-const STEPS = [
-  {
-    n: '01',
-    title: 'Upload your resume',
-    body: 'PDF, DOCX, DOC, TXT or RTF. It is read in memory and never written to disk.',
-  },
-  {
-    n: '02',
-    title: 'Paste the job description',
-    body: 'The real posting you are applying to. Matching is per-job — a generic scan tells you very little.',
-  },
-  {
-    n: '03',
-    title: 'Read what to fix first',
-    body: 'Matched and missing keywords, parsing risks, and prioritised suggestions. Roughly 10–20 seconds.',
-  },
-];
-
-const ANALYSED = [
-  {
-    title: 'Keyword coverage',
-    body: 'Exact matches, semantic equivalents ("people management" ≈ "team leadership"), and terms the posting emphasises that your resume never mentions.',
-  },
-  {
-    title: 'Parsing risks',
-    body: 'Multi-column layouts, tables, contact details stranded in a page header, encoding damage, and image-only PDFs with no text layer. These checks are deterministic — same document, same findings, every time.',
-  },
-  {
-    title: 'Structure',
-    body: 'Whether standard sections are detectable, whether employment dates are in a readable format, and whether achievements carry numbers.',
-  },
-  {
-    title: 'Priority',
-    body: 'An ordered list, because knowing there are eleven problems is not useful without knowing which two matter.',
-  },
-];
-
 const FAQS = [
-  {
-    q: 'Is it really free?',
-    a: 'Yes, with no sign-up and no scan limit beyond basic rate limiting to prevent abuse. The site is supported by advertising.',
-  },
-  {
-    q: 'Do you store my resume?',
-    a: 'No. The file is read into memory, text is extracted, and it is discarded when the request finishes. Nothing is written to disk or to a database. If you choose to save a result link, only the analysis is stored — your score and suggestions — never the resume text or the job description.',
-  },
-  {
-    q: 'What is sent to the AI?',
-    a: 'Professional content only. Before anything leaves our server we remove email addresses, phone numbers, profile URLs, postal addresses, national ID numbers, and your name where it appears in the resume header. The same removal runs on the job description you paste.',
-  },
-  {
-    q: 'Is this the same score a real ATS would give me?',
-    a: 'No, and no tool can give you that. There is no single applicant tracking system — Workday, Greenhouse, Taleo and the rest parse and rank differently. Our score is our own heuristic, and we publish exactly how it is calculated on our methodology page.',
-  },
-  {
-    q: 'Will a high score get me an interview?',
-    a: 'We cannot promise that, and we would be suspicious of anyone who does. A good score means your resume is machine-readable and aligned with the posting. It says nothing about the other applicants, the hiring manager, or whether the role was already filled internally.',
-  },
-  {
-    q: 'Should I add keywords I do not actually have?',
-    a: 'No. Add a term only if you genuinely have the experience. A resume that gets you into an interview you cannot substantiate has not helped you.',
-  },
-  {
-    q: 'What file formats work best?',
-    a: 'A PDF exported directly from a word processor is the most reliable, followed by DOCX. Avoid scans, screenshots, and PDFs exported from design tools with text converted to outlines — those have no text layer to read.',
-  },
+  { q: 'Is ATS Scanner Pro really free?', a: 'Yes. There are no scan limits, no sign-up and no paid tier for the web scanner. The site is supported by a small number of clearly labelled ads on some pages.' },
+  { q: 'Is my resume uploaded anywhere?', a: 'No. Your file is opened and analysed by code running in your own browser tab. It isn\'t sent to our servers or to any AI service, and nothing is kept after you close the page except, if your browser allows it, your last score for each job description so we can show progress.' },
+  { q: 'How accurate is the score?', a: 'It\'s our own estimate, built from the same signals most applicant tracking systems rely on: the posting\'s important terms, clean parsing, standard sections and clear results. Employers\' systems are configured differently and none publish their formulas, so treat the score as a guide and the list of missing terms as the useful part. The full formula is on our methodology page.' },
+  { q: 'Will this guarantee me an interview?', a: 'No tool can. A better-matched, cleanly formatted resume is more likely to appear in a recruiter\'s search and to be read, but hiring decisions depend on your experience, the other applicants and the team.' },
+  { q: 'Should I add every missing keyword?', a: 'Only the ones that are true. Recruiters and interviewers ask about what\'s on the page, and adding skills you don\'t have tends to come out quickly. Use the list to spot things you have done but didn\'t name.' },
+  { q: 'Which file types work?', a: 'PDF, DOCX and TXT, up to 8 MB. You can also paste plain text. Scanned PDFs and old .doc files can\'t be read — and many applicant tracking systems struggle with them too.' },
+  { q: 'Does it work for jobs outside tech?', a: 'Yes. The keyword list covers engineering, data, product, design, marketing, sales, finance, HR, operations, healthcare and education, and the scanner also picks up tool names and repeated phrases it hasn\'t seen before.' },
 ];
 
-type Props = { searchParams: Promise<{ role?: string }> };
-
-export default async function HomePage({ searchParams }: Props) {
-  const { role: roleParam } = await searchParams;
-
-  const initialRole = roleParam && getRoleBySlug(roleParam) ? roleParam : '';
-
-  const roles = getAllRoles();
-  const featured = roles.slice(0, 12);
-
-  const schemas = [
-    buildWebSiteSchema(),
-    buildSoftwareAppSchema(),
-    buildFAQSchema(FAQS.map((f) => ({ question: f.q, answer: f.a }))),
-  ];
-
+export default function Home() {
   return (
     <>
-      <SchemaMarkup schemas={schemas} />
-      <Header />
+      <JsonLd data={graph(webAppSchema())} />
 
-      <main>
-        {/* ── Hero ──────────────────────────────────────────────────── */}
-        <section className="pt-28 pb-10 px-4">
-          <div className="max-w-3xl mx-auto text-center">
-            <span className="badge mb-5 inline-flex">Free · No sign-up · Nothing stored</span>
-            <h1 className="text-4xl sm:text-5xl font-black font-syne text-white leading-[1.1] mb-5">
-              See what a job posting asks for that your resume doesn&apos;t say
-            </h1>
-            <p className="text-lg text-slate-400 leading-relaxed max-w-xl mx-auto">
-              Upload your resume and paste the job description. You&apos;ll get the keywords that
-              match, the ones that are missing, and the formatting that could stop it being read
-              properly.
-            </p>
+      {/* Hero */}
+      <section className="wrap grid items-center gap-12 pt-12 pb-16 md:pt-20 lg:grid-cols-[1.05fr_1fr] lg:gap-16">
+        <div className="rise">
+          <h1 className="display">Find the words your resume is missing.</h1>
+          <p className="lede mt-6">
+            Paste a job post and add your resume. In seconds you&apos;ll see which skills the employer asks for that you never mention, what could break when an
+            applicant tracking system reads your file, and what to fix first.
+          </p>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <Link href="#scanner" className="btn btn-ink">Check my resume</Link>
+            <Link href="/methodology" className="btn btn-ghost">How we score</Link>
           </div>
-        </section>
-
-        {/* ── The tool ──────────────────────────────────────────────── */}
-        <section id="scanner" className="px-4 pb-14 scroll-mt-20">
-          <ATSScanner initialRole={initialRole} />
-        </section>
-
-        <section className="px-4 pb-14">
-          <div className="max-w-4xl mx-auto">
-            <ScanHistory />
-          </div>
-        </section>
-
-        {/* ── Mobile CTA Integration ────────────────────────────────── */}
-        <section className="px-4 pb-14">
-          <div className="max-w-4xl mx-auto">
-            <AppDownloadBanner />
-          </div>
-        </section>
-
-        {/* ── How it works ──────────────────────────────────────────── */}
-        <section className="px-4 py-14 border-t border-white/[0.06]">
-          <div className="max-w-3xl mx-auto">
-            <h2 className="text-2xl font-bold font-syne text-white mb-8">How it works</h2>
-            <div className="grid sm:grid-cols-3 gap-4">
-              {STEPS.map((step) => (
-                <div key={step.n} className="glass-card rounded-xl p-5">
-                  <span className="text-xs font-mono text-blue-400">{step.n}</span>
-                  <h3 className="font-semibold text-white text-sm mt-2 mb-1.5">{step.title}</h3>
-                  <p className="text-sm text-slate-400 leading-relaxed">{step.body}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* ── What gets analysed ────────────────────────────────────── */}
-        <section className="px-4 py-14 border-t border-white/[0.06]">
-          <div className="max-w-3xl mx-auto">
-            <h2 className="text-2xl font-bold font-syne text-white mb-3">What we look at</h2>
-            <p className="text-slate-400 leading-relaxed mb-8 max-w-xl">
-              Four things, in the order they tend to matter.
-            </p>
-            <div className="grid sm:grid-cols-2 gap-4">
-              {ANALYSED.map((item) => (
-                <div key={item.title} className="glass-card rounded-xl p-5">
-                  <h3 className="font-semibold text-white text-sm mb-1.5">{item.title}</h3>
-                  <p className="text-sm text-slate-400 leading-relaxed">{item.body}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* ── Trust ─────────────────────────────────────────────────── */}
-        <section className="px-4 py-14 border-t border-white/[0.06]">
-          <div className="max-w-3xl mx-auto">
-            <h2 className="text-2xl font-bold font-syne text-white mb-3">
-              What happens to your resume
-            </h2>
-            <div className="text-slate-400 leading-relaxed space-y-3 max-w-xl mb-6">
-              <p>
-                It is read into memory, the text is extracted, and the file is discarded when the
-                request ends. There is no temporary directory and no storage bucket — nothing to
-                leak later.
-              </p>
-              <p>
-                Before any text reaches the AI, we remove contact details, profile URLs, national
-                ID numbers, and your name where it appears in the header. Automated redaction is
-                thorough but not perfect, and we say so rather than promising otherwise.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <Link href="/security" className="btn-secondary px-5 py-2.5 rounded-xl text-sm font-semibold">
-                How we handle data
-              </Link>
-              <Link href="/methodology" className="btn-secondary px-5 py-2.5 rounded-xl text-sm font-semibold">
-                How the score works
-              </Link>
-            </div>
-          </div>
-        </section>
-
-        {/* ── Ad Placement ──────────────────────────────────────────── */}
-        <div className="max-w-3xl mx-auto px-4">
-          <InContentAd />
+          <ul className="mt-8 grid gap-2 text-[0.98rem] text-ink-2 sm:grid-cols-3 sm:gap-4">
+            {['Free, with no scan limits', 'No account needed', 'Your file stays on your device'].map((t) => (
+              <li key={t} className="flex items-center gap-2">
+                <Tick />
+                {t}
+              </li>
+            ))}
+          </ul>
         </div>
+        <HeroSheet />
+      </section>
 
-        {/* ── Role guides ───────────────────────────────────────────── */}
-        <section className="px-4 py-14 border-t border-white/[0.06]">
-          <div className="max-w-3xl mx-auto">
-            <h2 className="text-2xl font-bold font-syne text-white mb-3">Guides by role</h2>
-            <p className="text-slate-400 leading-relaxed mb-8 max-w-xl">
-              The terms that appear most in postings for a given role, and how to structure a
-              resume for it.
+      {/* Scanner */}
+      <section id="scanner" aria-labelledby="scanner-title" className="scroll-mt-20 border-y border-rule bg-[#e6eaf0] py-14 sm:py-16">
+        <div className="wrap">
+          <div className="mb-8 max-w-2xl">
+            <h2 id="scanner-title" className="h-section">Check your resume against a job</h2>
+            <p className="mt-3 text-ink-2">
+              Works with any role and any country. Everything happens in this browser tab: we never see your resume or the job description.
             </p>
-            <div className="flex flex-wrap gap-2 mb-5">
-              {featured.map((role) => (
-                <Link
-                  key={role.slug}
-                  href={`/role/${role.slug}`}
-                  className="text-sm px-3.5 py-2 rounded-lg bg-white/[0.04] border border-white/[0.07] text-slate-300 hover:text-white hover:bg-white/[0.08] hover:border-white/[0.14] transition-colors"
-                >
-                  {role.title}
-                </Link>
-              ))}
+          </div>
+          <Scanner />
+        </div>
+      </section>
+
+      {/* What it checks */}
+      <section className="wrap py-20" aria-labelledby="checks-title">
+        <h2 id="checks-title" className="h-section max-w-2xl">What the scan looks at</h2>
+        <dl className="mt-10 grid gap-x-12 gap-y-10 md:grid-cols-2">
+          {[
+            { t: 'Keywords, weighted the way the posting weighs them', d: 'Skills under "requirements" count three times as much as nice-to-haves. We recognise common alternatives — k8s for Kubernetes, CI/CD for continuous integration — and flag terms that only appear in your skills list but never in your experience.' },
+            { t: 'What an ATS will actually extract', d: 'For PDFs we measure how many lines sit side by side in columns. For Word files we count tables and images. We check for contact details in the body, standard headings, readable dates and broken characters.' },
+            { t: 'Whether your bullets show results', d: 'We count how many bullets include a number and how many open with a strong verb, and point out openers like "responsible for" that hide what you did.' },
+            { t: 'The job title and the basics', d: 'Whether your resume uses the title from the posting, how many years of experience it asks for, and whether you have the sections recruiters expect.' },
+          ].map((x) => (
+            <div key={x.t} className="border-t-2 border-ink pt-5">
+              <dt className="h-card">{x.t}</dt>
+              <dd className="mt-2 text-ink-2">{x.d}</dd>
             </div>
-            <Link
-              href="/roles"
-              className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
-            >
-              All {roles.length} role guides →
-            </Link>
-          </div>
-        </section>
+          ))}
+        </dl>
+        <p className="mt-10 max-w-2xl text-ink-2">
+          Every weight is published on the <Link href="/methodology">methodology page</Link>. If a check is a strong signal rather than a measurement, the report says so.
+        </p>
+      </section>
 
-        {/* ── FAQ ───────────────────────────────────────────────────── */}
-        <section className="px-4 py-14 border-t border-white/[0.06]">
-          <div className="max-w-2xl mx-auto">
-            <h2 className="text-2xl font-bold font-syne text-white mb-8">Common questions</h2>
-            <FAQAccordion items={FAQS} />
-          </div>
-        </section>
-
-        {/* ── Close ─────────────────────────────────────────────────── */}
-        <section className="px-4 py-16 border-t border-white/[0.06]">
-          <div className="max-w-xl mx-auto text-center">
-            <h2 className="text-2xl font-bold font-syne text-white mb-3">
-              Check it before you send it
-            </h2>
-            <p className="text-slate-400 leading-relaxed mb-6">
-              Takes under a minute. No account, and nothing kept.
+      {/* Why in-browser */}
+      <section className="wrap pb-20" aria-labelledby="private-title">
+        <div className="sheet grid gap-8 p-8 sm:p-10 md:grid-cols-[1fr_1.2fr] md:items-center">
+          <h2 id="private-title" className="h-section">Your resume has your phone number on it. It shouldn&apos;t need to leave your laptop.</h2>
+          <div className="space-y-4 text-ink-2">
+            <p>
+              Most resume checkers upload your file to their servers, and many send it to an AI service. We built ATS Scanner Pro to do the whole analysis in your
+              browser instead. If you open your browser&apos;s developer tools and watch the network tab while you scan, you&apos;ll see that nothing is sent.
             </p>
-            <Link href="#scanner" className="btn-primary inline-flex px-6 py-3 rounded-xl font-bold">
-              Scan my resume
-            </Link>
+            <p>
+              That also means there&apos;s no cost to us per scan, which is why we don&apos;t need to limit how many you run. Scan every application you send.
+            </p>
           </div>
-        </section>
-      </main>
+        </div>
+      </section>
 
-      <Footer />
+      <div className="wrap">
+        <AdSlot slot={ADSENSE.slots.homeMid} />
+      </div>
+
+      {/* Guides */}
+      <section className="wrap py-16" aria-labelledby="guides-title">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <h2 id="guides-title" className="h-section">Guides that answer the next question</h2>
+          <Link href="/guides" className="font-semibold">All guides</Link>
+        </div>
+        <ul className="mt-8 divide-y divide-rule border-y border-rule">
+          {GUIDES.slice(0, 6).map((g) => (
+            <li key={g.slug}>
+              <Link href={`/guides/${g.slug}`} className="group grid gap-1 py-5 no-underline md:grid-cols-[1fr_1.4fr] md:gap-8">
+                <span className="text-[1.15rem] font-bold text-ink group-hover:underline">{g.short}</span>
+                <span className="text-ink-2">{g.description}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Roles */}
+      <section className="wrap py-10" aria-labelledby="roles-title">
+        <h2 id="roles-title" className="h-section">Keyword guides by role</h2>
+        <p className="mt-3 max-w-2xl text-ink-2">What recruiters search for, example bullets, and the mistakes we see most for each job.</p>
+        <ul className="mt-8 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+          {ROLES.map((r) => (
+            <li key={r.slug}>
+              <Link href={`/role/${r.slug}`} className="font-medium">{r.title}</Link>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* App */}
+      <section id="app" className="wrap scroll-mt-20 py-20" aria-labelledby="app-title">
+        <div className="grid gap-10 rounded-2xl bg-ink p-8 text-white sm:p-12 lg:grid-cols-2 lg:gap-16">
+          <div>
+            <h2 id="app-title" className="h-section text-white">The mobile app is invite-only for now</h2>
+            <p className="mt-4 text-[1.05rem] text-white/80">
+              We&apos;re building ATS Scanner Pro for Android and iPhone: scan a job post the moment you see it, keep every tailored version of your resume in one
+              place, and track where you&apos;ve applied. We&apos;re opening it in small batches so we can fix things quickly with the first users.
+            </p>
+            <div className="mt-8 [&_.btn-ghost]:text-ink">
+              <AppButtons />
+            </div>
+          </div>
+          <div className="rounded-xl bg-white p-6 text-ink sm:p-7">
+            <h3 className="h-card mb-4">Request an invite</h3>
+            <InviteForm source="home" />
+          </div>
+        </div>
+      </section>
+
+      <div className="wrap-narrow pb-8">
+        <Faq items={FAQS} />
+      </div>
     </>
+  );
+}
+
+function Tick() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true" className="shrink-0">
+      <rect x="1" y="5" width="18" height="10" rx="3" fill="#FFE14D" />
+      <path d="M6 10.2l2.6 2.4L14 7.6" stroke="#14213D" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

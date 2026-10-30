@@ -2,27 +2,16 @@
   "id": "/",
   "name": "ATS Scanner Pro",
   "short_name": "ATS Scanner",
-  "description": "Free AI-powered ATS resume checker. Compare your resume against any job description and see what to fix.",
+  "description": "Free ATS resume checker that runs in your browser. Compare your resume with any job description.",
   "start_url": "/?source=pwa",
   "display": "standalone",
-  "background_color": "#040B1A",
-  "theme_color": "#040B1A",
-  "orientation": "portrait-primary",
+  "background_color": "#eef1f5",
+  "theme_color": "#eef1f5",
   "scope": "/",
-  "lang": "en-US",
-  "dir": "ltr",
+  "lang": "en",
   "categories": ["productivity", "business", "utilities"],
   "icons": [
     { "src": "/icon-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
-  ],
-  "shortcuts": [
-    {
-      "name": "Scan resume",
-      "short_name": "Scan",
-      "description": "Scan your resume against a job description",
-      "url": "/?source=pwa-shortcut#scanner"
-    }
+    { "src": "/icon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
   ]
 }
